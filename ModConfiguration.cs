@@ -1,5 +1,10 @@
 using BepInEx.Configuration;
+using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
+using HarmonyLib;
 using UnityEngine;
 
 namespace BuildingInspector
@@ -17,6 +22,7 @@ namespace BuildingInspector
         private static ConfigEntry<KeyboardShortcut> editNoteKey;
         private static ConfigEntry<float> flagBlockRadius;
         private static ConfigEntry<bool> testFlagEnabled;
+        private static ConfigFile modConfiguration;
         private static readonly List<ConfigEntry<string>> labelNames = new List<ConfigEntry<string>>();
         private static readonly List<ConfigEntry<string>> labelDescriptions = new List<ConfigEntry<string>>();
         private static readonly List<ConfigEntry<string>> labelColors = new List<ConfigEntry<string>>();
@@ -55,19 +61,17 @@ namespace BuildingInspector
                 flagVariants[index] = new FlagVariant($"Inspection Flag - {name}", description, prefabNames[index], color);
             }
 
-            testFlagEnabled = Config.Bind("Test Flag", "Enabled", false,
-                "Register an isolated test flag for checking label configuration. Restart the game after changing this setting.");
-            string testName = Config.Bind("Test Flag", "Name", "Configuration Test",
-                "Display name for the optional test flag.").Value;
-            string testDescription = Config.Bind("Test Flag", "Description", "Temporary flag for testing label settings.",
-                "Description for the optional test flag.").Value;
-            string testColorValue = Config.Bind("Test Flag", "Color", "#FF00FF",
-                "Hex color for the optional test flag, for example #FF00FF.").Value;
+            string testName = BindTestFlagSetting("Name", "Configuration Test",
+                "Display name for the optional test flag.");
+            string testDescription = BindTestFlagSetting("Description", "Temporary flag for testing label settings.",
+                "Description for the optional test flag.");
+            string testColorValue = BindTestFlagSetting("Color", "#FF00FF",
+                "Hex color for the optional test flag, for example #FF00FF.");
             Color testColor;
             if (!ColorUtility.TryParseHtmlString(testColorValue, out testColor))
             {
                 testColor = Color.magenta;
-                Logger.LogWarning($"Invalid Test Flag Color '{testColorValue}'; using #FF00FF.");
+                Logger.LogWarning($"Invalid Debug TestFlagColor '{testColorValue}'; using #FF00FF.");
             }
 
             testName = string.IsNullOrWhiteSpace(testName) ? "Configuration Test" : testName.Trim();
@@ -75,8 +79,18 @@ namespace BuildingInspector
                 testDescription ?? string.Empty, "InspectionFlagConfigTest", testColor);
         }
 
+        private string BindTestFlagSetting(string key, string defaultValue, string description)
+        {
+            // Preserve the old value when the corresponding Debug setting does not exist yet.
+            string previousValue = Config.Bind("Test Flag", key, defaultValue, description).Value;
+            string value = Config.Bind("Debug", $"TestFlag{key}", previousValue, description).Value;
+            Config.Remove(new ConfigDefinition("Test Flag", key));
+            return value;
+        }
+
         private void InitializeConfiguration()
         {
+            modConfiguration = Config;
             tiltForwardKey = Config.Bind("Flag Rotation", "TiltForwardKey", new KeyboardShortcut(KeyCode.I), "Tilt the flag forward.");
             tiltBackwardKey = Config.Bind("Flag Rotation", "TiltBackwardKey", new KeyboardShortcut(KeyCode.K), "Tilt the flag backward.");
             tiltLeftKey = Config.Bind("Flag Rotation", "TiltLeftKey", new KeyboardShortcut(KeyCode.J), "Tilt the flag to the left.");
@@ -101,6 +115,54 @@ namespace BuildingInspector
                 "Enable inspection editor and RPC diagnostics in LogOutput.log. " +
                 "Changes in memory apply immediately; reload the config or restart after editing the file.");
             InspectorDebug.Initialize(enabled, Logger);
+            testFlagEnabled = Config.Bind("Debug", "TestFlagEnabled", false,
+                "Register an isolated development/test flag for checking label configuration. Restart the game after changing this setting.");
+
+            // Bind the retired key once to remove it from BepInEx's orphaned entries as well.
+            Config.Bind("Test Flag", "Enabled", false, "Replaced by Debug.TestFlagEnabled.");
+            Config.Remove(new ConfigDefinition("Test Flag", "Enabled"));
+            Config.Save();
+            MoveDebugSectionToEnd(Config);
+        }
+
+        private static void MoveDebugSectionToEnd(ConfigFile configuration)
+        {
+            try
+            {
+                string path = configuration.ConfigFilePath;
+                string text = File.ReadAllText(path, Encoding.UTF8);
+                Match debugSection = Regex.Match(text, @"(?m)^\[Debug\][ \t]*\r?$");
+                if (!debugSection.Success)
+                    return;
+
+                Match nextSection = Regex.Match(text.Substring(debugSection.Index + debugSection.Length),
+                    @"(?m)^\[[^\r\n]+\][ \t]*\r?$");
+                if (!nextSection.Success)
+                    return;
+
+                int end = debugSection.Index + debugSection.Length + nextSection.Index;
+                string debugText = text.Substring(debugSection.Index, end - debugSection.Index);
+                string otherSections = text.Remove(debugSection.Index, debugText.Length);
+                string newline = text.Contains("\r\n") ? "\r\n" : "\n";
+                File.WriteAllText(path, otherSections.TrimEnd('\r', '\n') + newline + newline +
+                    debugText.TrimEnd('\r', '\n') + newline, new UTF8Encoding(false));
+            }
+            catch (Exception exception)
+            {
+                log.LogWarning($"Could not move Debug to the end of the mod configuration: {exception.Message}");
+            }
+        }
+
+        [HarmonyPatch(typeof(ConfigFile), nameof(ConfigFile.Save))]
+        private static class ModConfigurationSavePatch
+        {
+            [HarmonyPostfix]
+            private static void Postfix(ConfigFile __instance)
+            {
+                // BepInEx sorts sections alphabetically; only reorder this plugin's file.
+                if (ReferenceEquals(__instance, modConfiguration))
+                    MoveDebugSectionToEnd(__instance);
+            }
         }
     }
 }
