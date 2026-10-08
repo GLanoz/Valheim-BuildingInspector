@@ -48,15 +48,25 @@ namespace BuildingInspector
                 flagEditorInputUnblockPending = false;
             }
 
-            if (!editNoteKey.Value.IsDown() || TextInput.IsVisible() || InventoryGui.IsVisible() ||
+            if (!editNoteKey.Value.IsDown())
+                return;
+
+            if (InspectorDebug.Enabled)
+                InspectorDebug.Write($"Editor open requested: role={InspectorDebug.Role}.");
+
+            if (TextInput.IsVisible() || InventoryGui.IsVisible() ||
                 Menu.IsVisible() || Console.IsVisible() || StoreGui.IsVisible() || Minimap.IsOpen())
             {
+                if (InspectorDebug.Enabled)
+                    InspectorDebug.Write($"Editor open denied: reason={GetEditorUiBlockReason()}.");
                 return;
             }
 
             Camera camera = Camera.main;
             if (!camera)
             {
+                if (InspectorDebug.Enabled)
+                    InspectorDebug.Write("Editor open denied: reason=CameraUnavailable.");
                 return;
             }
 
@@ -74,6 +84,8 @@ namespace BuildingInspector
                 {
                     if (!receiver.CanEditCategory())
                     {
+                        if (InspectorDebug.Enabled)
+                            LogEditorEvent(receiver, "denied", GetEditorDenialReason(receiver));
                         return;
                     }
 
@@ -83,9 +95,13 @@ namespace BuildingInspector
 
                 if (BlocksNoteRay(hit.collider))
                 {
+                    if (InspectorDebug.Enabled)
+                        InspectorDebug.Write("Editor open denied: reason=RayBlockedByWorldCollider.");
                     return;
                 }
             }
+            if (InspectorDebug.Enabled)
+                InspectorDebug.Write("Editor open denied: reason=NoInspectionFlagInRay.");
         }
 
         private void LateUpdate()
@@ -112,6 +128,9 @@ namespace BuildingInspector
         {
             if (!receiver || !receiver.CanEditCategory() || !EnsureFlagEditorUi())
             {
+                if (InspectorDebug.Enabled)
+                    LogEditorEvent(receiver, "denied", !receiver ? "TargetUnavailable" :
+                        !receiver.CanEditCategory() ? GetEditorDenialReason(receiver) : "EditorUiUnavailable");
                 return;
             }
 
@@ -137,6 +156,42 @@ namespace BuildingInspector
             }
 
             flagEditorNoteField.ActivateInputField();
+            if (InspectorDebug.Enabled)
+                LogEditorEvent(receiver, "opened", "Authorized");
+        }
+
+        private static string GetEditorUiBlockReason()
+        {
+            if (TextInput.IsVisible()) return "TextInputVisible";
+            if (InventoryGui.IsVisible()) return "InventoryVisible";
+            if (Menu.IsVisible()) return "MenuVisible";
+            if (Console.IsVisible()) return "ConsoleVisible";
+            if (StoreGui.IsVisible()) return "StoreVisible";
+            return "MinimapOpen";
+        }
+
+        private static string GetEditorDenialReason(FlagNoteReceiver receiver)
+        {
+            if (!receiver) return "TargetUnavailable";
+            ZNetView view = receiver.GetComponent<ZNetView>();
+            if (!view) return "ZNetViewUnavailable";
+            if (view.GetZDO() == null) return "ZdoUnavailable";
+            Piece piece = receiver.GetComponent<Piece>();
+            if (!piece) return "PieceUnavailable";
+            if (piece.GetCreator() == 0L) return "CreatorIdMissing";
+            return "CharacterIsNotCreator";
+        }
+
+        private static void LogEditorEvent(FlagNoteReceiver receiver, string eventName, string reason)
+        {
+            if (!InspectorDebug.Enabled) return;
+            ZNetView view = receiver ? receiver.GetComponent<ZNetView>() : null;
+            ZDO zdo = view ? view.GetZDO() : null;
+            Piece piece = receiver ? receiver.GetComponent<Piece>() : null;
+            PlayerProfile profile = Game.instance ? Game.instance.GetPlayerProfile() : null;
+            InspectorDebug.Write($"Editor {eventName}: role={InspectorDebug.Role}; flag={(zdo != null ? zdo.m_uid : ZDOID.None)}; " +
+                $"creator={(piece ? piece.GetCreator() : 0L)}; character={(profile != null ? profile.GetPlayerID() : 0L)}; " +
+                $"owner={(zdo != null ? zdo.GetOwner() : 0L)}; reason={reason}.");
         }
 
         private bool EnsureFlagEditorUi()
@@ -316,6 +371,8 @@ namespace BuildingInspector
                 return;
             }
 
+            if (InspectorDebug.Enabled)
+                LogEditorEvent(flagEditorTarget, "closed", "EditorClosed");
             flagEditorOpen = false;
             flagEditorTarget = null;
             if (flagEditorCanvas)

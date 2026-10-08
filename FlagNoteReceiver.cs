@@ -27,6 +27,8 @@ namespace BuildingInspector
                 {
                     nview.Register<string>(NoteRpcName, SetNoteRpc);
                     nview.Register<int>(ChangeCategoryRpcName, ChangeCategoryRpc);
+                    if (InspectorDebug.Enabled)
+                        InspectorDebug.Write($"Flag RPC guards registered: flag={(nview.GetZDO() != null ? nview.GetZDO().m_uid : ZDOID.None)}; role={InspectorDebug.Role}.");
                 }
 
                 Transform clothTransform = transform.Find("InspectionFlagPole/InspectionFlagCloth");

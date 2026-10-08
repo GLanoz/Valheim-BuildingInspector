@@ -30,14 +30,51 @@ namespace BuildingInspector
             public float RetryAt;
         }
 
+        private static void TraceFlagEdit(string eventName, ZDOID target, ZRpc connection, long checkedCharacterId,
+            string note, int category, string reason, long editId = 0L)
+        {
+            if (!InspectorDebug.Enabled) return;
+            ZNet net = ZNet.instance;
+            ZNetPeer peer = net && connection != null ? GetConnectionPeer(net, connection) : null;
+            if (net && !net.IsServer() && connection == null &&
+                (eventName == "change applied" || eventName == "apply denied"))
+                peer = net.GetServerPeer();
+            ZDO zdo = ZDOMan.instance != null ? ZDOMan.instance.GetZDO(target) : null;
+            long sender = peer != null ? peer.m_uid : connection == null && net && ZDOMan.instance != null ? ZNet.GetUID() : 0L;
+            InspectorDebug.Write($"Network {eventName}: operation={(note != null ? "note" : "category")}; request={editId}; " +
+                $"flag={target}; senderUID={sender}; creator={(zdo != null ? zdo.GetLong(ZDOVars.s_creator, 0L) : 0L)}; " +
+                $"checkedCharacter={checkedCharacterId}; owner={(zdo != null ? zdo.GetOwner() : 0L)}; " +
+                $"role={InspectorDebug.Role}; noteLength={(note != null ? note.Length : 0)}; category={category}; reason={reason}.");
+        }
+
+        private static string GetCreatorResolutionReason(ZRpc connection)
+        {
+            ZNet net = ZNet.instance;
+            if (!net || !net.IsServer()) return "NotServer";
+            if (connection == null) return !Player.m_localPlayer ? "LocalPlayerUnavailable" : "LocalProfileIdUnavailable";
+            ZNetPeer peer = GetConnectionPeer(net, connection);
+            if (peer == null || !peer.IsReady()) return "SenderConnectionNotReady";
+            ZDO character = ZDOMan.instance != null ? ZDOMan.instance.GetZDO(peer.m_characterID) : null;
+            if (character == null) return "CharacterZdoNotReplicated";
+            if (character.GetOwner() != peer.m_uid) return "CharacterOwnerDoesNotMatchConnection";
+            GameObject prefab = ZNetScene.instance ? ZNetScene.instance.GetPrefab(character.GetPrefab()) : null;
+            if (!prefab || !prefab.GetComponent<Player>()) return "CharacterPrefabNotPlayer";
+            return "CharacterProfileIdMissing";
+        }
+
         private static void SendFlagEditRequest(ZDO zdo, string note, int category)
         {
             ZNet net = ZNet.instance;
             if (zdo == null || !net)
             {
+                if (InspectorDebug.Enabled)
+                    TraceFlagEdit("send denied", zdo != null ? zdo.m_uid : ZDOID.None, null, 0L,
+                        note, category, zdo == null ? "FlagZdoUnavailable" : "NetworkUnavailable");
                 return;
             }
 
+            if (InspectorDebug.Enabled)
+                TraceFlagEdit("sending request", zdo.m_uid, null, 0L, note, category, "ToServer");
             if (net.IsServer())
             {
                 QueueFlagEdit(null, zdo.m_uid, note, category);
@@ -52,6 +89,8 @@ namespace BuildingInspector
                 else
                     server.m_rpc.Invoke(ChangeCategoryRpcName, zdo.m_uid, category);
             }
+            else if (InspectorDebug.Enabled)
+                TraceFlagEdit("send denied", zdo.m_uid, null, 0L, note, category, "ServerPeerUnavailable");
         }
 
         private static long GetRequestCreatorId(ZRpc connection)
@@ -120,11 +159,19 @@ namespace BuildingInspector
             bool validConnection = net && net.IsServer() &&
                 (connection == null ? creatorId != 0L : peer != null && peer.IsReady());
             ZDO rawZdo = ZDOMan.instance != null ? ZDOMan.instance.GetZDO(target) : null;
+            if (InspectorDebug.Enabled)
+                TraceFlagEdit("request received", target, connection, creatorId, note, category, "CheckingAuthorization");
             if (!validConnection || (rawZdo != null && zdo == null) ||
                 (zdo != null && creatorId != 0L && zdo.GetLong(ZDOVars.s_creator, 0L) != creatorId) ||
                 (note == null && (category < 0 || category >= FlagVariantCount)) ||
                 PendingFlagEdits.Count >= MaxPendingFlagEdits)
             {
+                if (InspectorDebug.Enabled)
+                    TraceFlagEdit("authorization denied", target, connection, creatorId, note, category,
+                        !validConnection ? "ConnectionNotReadyOrNotServer" :
+                        rawZdo != null && zdo == null ? "UnsupportedFlagPrefab" :
+                        zdo != null && creatorId != 0L && zdo.GetLong(ZDOVars.s_creator, 0L) != creatorId ? "CreatorMismatch" :
+                        note == null && (category < 0 || category >= FlagVariantCount) ? "CategoryOutOfRange" : "PendingLimitReached");
                 log.LogWarning("Rejected unauthorized inspection flag edit request.");
                 return;
             }
@@ -143,7 +190,15 @@ namespace BuildingInspector
             }
             if (superseded != null)
                 foreach (long oldEditId in superseded)
+                {
+                    if (InspectorDebug.Enabled)
+                    {
+                        PendingFlagEdit oldEdit = PendingFlagEdits[oldEditId];
+                        TraceFlagEdit("request superseded", oldEdit.Target, oldEdit.RequestConnection, oldEdit.CreatorId,
+                            oldEdit.Note, oldEdit.Category, "NewerEditOfSameField", oldEditId);
+                    }
                     PendingFlagEdits.Remove(oldEditId);
+                }
 
             long editId = ++nextFlagEditId;
             PendingFlagEdits.Add(editId, new PendingFlagEdit
@@ -154,6 +209,10 @@ namespace BuildingInspector
                 Note = note == null ? null : LimitNoteLength(note),
                 Category = category
             });
+            if (InspectorDebug.Enabled)
+                TraceFlagEdit("request queued", target, connection, creatorId, note, category,
+                    creatorId == 0L ? GetCreatorResolutionReason(connection) :
+                    zdo == null ? "WaitingForFlagZdo" : "Authorized", editId);
             DispatchFlagEdit(editId);
         }
 
@@ -170,6 +229,12 @@ namespace BuildingInspector
                 (creatorId != 0L && edit.CreatorId != 0L && creatorId != edit.CreatorId) ||
                 (zdo != null && creatorId != 0L && zdo.GetLong(ZDOVars.s_creator, 0L) != creatorId))
             {
+                if (InspectorDebug.Enabled)
+                    TraceFlagEdit("request ended without applying", edit.Target, edit.RequestConnection, creatorId,
+                        edit.Note, edit.Category, edit.Attempts >= MaxFlagEditAttempts ? "RetryBudgetExhausted" :
+                        rawZdo != null && zdo == null ? "UnsupportedFlagPrefab" :
+                        creatorId != 0L && edit.CreatorId != 0L && creatorId != edit.CreatorId ? "SenderCharacterChanged" :
+                        "CreatorMismatch", editId);
                 PendingFlagEdits.Remove(editId);
                 log.LogWarning("Inspection flag edit expired or authorization changed.");
                 return;
@@ -180,9 +245,21 @@ namespace BuildingInspector
             // Character/flag ZDO replication can trail the direct request after spawn or rejoin.
             // Wait within the same bounded retry budget; never approve an unresolved author.
             if (creatorId == 0L || zdo == null)
+            {
+                if (InspectorDebug.Enabled)
+                    TraceFlagEdit("waiting for replication", edit.Target, edit.RequestConnection, creatorId,
+                        edit.Note, edit.Category, creatorId == 0L ? GetCreatorResolutionReason(edit.RequestConnection) :
+                        "FlagZdoUnavailable", editId);
                 return;
+            }
 
             edit.CreatorId = creatorId;
+            if (InspectorDebug.Enabled && edit.Attempts > 1)
+            {
+                TraceFlagEdit("retrying request", edit.Target, edit.RequestConnection, creatorId, edit.Note, edit.Category,
+                    edit.SentOwner != zdo.GetOwner() ? "OwnerChanged" : "OwnerReplyMissingOrApplyRejected", editId);
+                InspectorDebug.Write($"Retry ownership: request={editId}; flag={edit.Target}; previousOwner={edit.SentOwner}; currentOwner={zdo.GetOwner()}.");
+            }
             edit.SentOwner = zdo.GetOwner();
             if (edit.SentOwner == ZNet.GetUID())
             {
@@ -193,7 +270,12 @@ namespace BuildingInspector
 
             ZNetPeer owner = ZNet.instance.GetPeer(edit.SentOwner);
             if (owner == null || !owner.IsReady())
+            {
+                if (InspectorDebug.Enabled)
+                    TraceFlagEdit("owner unavailable", edit.Target, edit.RequestConnection, creatorId,
+                        edit.Note, edit.Category, "OwnerPeerNotReady", editId);
                 return; // A bounded timeout retries if ownership is still being assigned.
+            }
 
             ZPackage package = new ZPackage();
             package.Write(editId);
@@ -204,6 +286,9 @@ namespace BuildingInspector
                 package.Write(edit.Note);
             else
                 package.Write(edit.Category);
+            if (InspectorDebug.Enabled)
+                TraceFlagEdit("forwarding approval", edit.Target, edit.RequestConnection, creatorId,
+                    edit.Note, edit.Category, "ToCurrentOwner", editId);
             owner.m_rpc.Invoke(ApplyFlagEditRpcName, package);
         }
 
@@ -213,12 +298,21 @@ namespace BuildingInspector
             if (zdo == null || !zdo.IsOwner() || creatorId == 0L ||
                 zdo.GetLong(ZDOVars.s_creator, 0L) != creatorId ||
                 (note == null && (category < 0 || category >= FlagVariantCount)))
+            {
+                if (InspectorDebug.Enabled)
+                    TraceFlagEdit("apply denied", target, null, creatorId, note, category,
+                        zdo == null ? "FlagZdoUnavailableOrUnsupported" : !zdo.IsOwner() ? "NotCurrentOwner" :
+                        creatorId == 0L ? "CreatorIdMissing" : zdo.GetLong(ZDOVars.s_creator, 0L) != creatorId ?
+                        "CreatorMismatch" : "CategoryOutOfRange");
                 return false;
+            }
 
             if (note != null)
                 zdo.Set(NoteZdoKey, LimitNoteLength(note));
             else
                 zdo.Set(FlagCategoryZdoKey, category);
+            if (InspectorDebug.Enabled)
+                TraceFlagEdit("change applied", target, null, creatorId, note, category, "Applied");
             return true;
         }
 
@@ -228,6 +322,8 @@ namespace BuildingInspector
             ZNetPeer server = net && !net.IsServer() ? net.GetServerPeer() : null;
             if (server == null || !ReferenceEquals(server.m_rpc, connection))
             {
+                if (InspectorDebug.Enabled)
+                    InspectorDebug.Write($"Approval denied: role={InspectorDebug.Role}; reason=NotServerConnection.");
                 log.LogWarning("Rejected inspection flag approval not sent by the server connection.");
                 return;
             }
@@ -238,6 +334,8 @@ namespace BuildingInspector
             bool isNote = package.ReadBool();
             string note = isNote ? package.ReadString() : null;
             int category = isNote ? -1 : package.ReadInt();
+            if (InspectorDebug.Enabled)
+                TraceFlagEdit("approval received", target, connection, creatorId, note, category, "ServerConnectionVerified", editId);
             bool applied = ApplyAuthorizedFlagEdit(target, creatorId, note, category);
             connection.Invoke(FlagEditResultRpcName, editId, applied);
         }
@@ -252,9 +350,17 @@ namespace BuildingInspector
             ZNetPeer peer = GetConnectionPeer(net, connection);
             if (peer == null || !peer.IsReady() || !PendingFlagEdits.TryGetValue(editId, out edit) ||
                 peer.m_uid != edit.SentOwner)
+            {
+                if (InspectorDebug.Enabled)
+                    InspectorDebug.Write($"Edit result ignored: request={editId}; role={InspectorDebug.Role}; reason=UnknownRequestOrUnexpectedConnection.");
                 return;
+            }
 
             ZDO zdo = GetEditableFlagZdo(edit.Target);
+            if (InspectorDebug.Enabled)
+                TraceFlagEdit("owner result received", edit.Target, connection, edit.CreatorId, edit.Note, edit.Category,
+                    !applied ? "OwnerRejectedApply" : zdo == null ? "FlagZdoUnavailable" :
+                    zdo.GetOwner() != edit.SentOwner ? "OwnerChanged" : "AppliedAndConfirmed", editId);
             if (applied && zdo != null && zdo.GetOwner() == edit.SentOwner)
                 PendingFlagEdits.Remove(editId);
             else
@@ -273,6 +379,8 @@ namespace BuildingInspector
                     (connection, target, category) => QueueFlagEdit(connection, target, null, category));
                 __0.m_rpc.Register<ZPackage>(ApplyFlagEditRpcName, ReceiveAuthorizedFlagEdit);
                 __0.m_rpc.Register<long, bool>(FlagEditResultRpcName, ReceiveFlagEditResult);
+                if (InspectorDebug.Enabled)
+                    InspectorDebug.Write($"RPC registered on connection: role={InspectorDebug.Role}; peerUID={__0.m_uid}.");
             }
         }
 
@@ -282,6 +390,8 @@ namespace BuildingInspector
             [HarmonyPostfix]
             private static void Postfix()
             {
+                if (InspectorDebug.Enabled)
+                    InspectorDebug.Write($"Network world initialized: pendingRequestsCleared={PendingFlagEdits.Count}.");
                 PendingFlagEdits.Clear();
             }
         }
@@ -317,6 +427,10 @@ namespace BuildingInspector
             {
                 if (categoryIndex < 0 || categoryIndex >= flagVariants.Length || !CanEditCategory())
                 {
+                    if (InspectorDebug.Enabled)
+                        TraceFlagEdit("category request denied", nview && nview.GetZDO() != null ? nview.GetZDO().m_uid : ZDOID.None,
+                            null, 0L, null, categoryIndex, categoryIndex < 0 || categoryIndex >= flagVariants.Length ?
+                            "CategoryOutOfRange" : "LocalCreatorCheckFailed");
                     return;
                 }
 
@@ -326,6 +440,9 @@ namespace BuildingInspector
             private void ChangeCategoryRpc(long sender, int categoryIndex)
             {
                 // Object-routed requests cannot prove the original connection on a client owner.
+                if (InspectorDebug.Enabled)
+                    InspectorDebug.Write($"Legacy category RPC denied: senderUID={sender}; category={categoryIndex}; " +
+                        $"role={InspectorDebug.Role}; reason=ObjectRoutedTransportDisabled.");
                 log.LogWarning("Rejected legacy object-routed inspection flag category update.");
             }
 
@@ -336,10 +453,16 @@ namespace BuildingInspector
                 {
                     SendFlagEditRequest(nview.GetZDO(), LimitNoteLength((text ?? string.Empty).Trim()), -1);
                 }
+                else if (InspectorDebug.Enabled)
+                    TraceFlagEdit("note request denied", nview && nview.GetZDO() != null ? nview.GetZDO().m_uid : ZDOID.None,
+                        null, 0L, text ?? string.Empty, -1, "LocalCreatorCheckFailedOrZdoUnavailable");
             }
 
             private void SetNoteRpc(long sender, string text)
             {
+                if (InspectorDebug.Enabled)
+                    InspectorDebug.Write($"Legacy note RPC denied: senderUID={sender}; noteLength={(text != null ? text.Length : 0)}; " +
+                        $"role={InspectorDebug.Role}; reason=ObjectRoutedTransportDisabled.");
                 log.LogWarning("Rejected legacy object-routed inspection flag note update.");
             }
         }

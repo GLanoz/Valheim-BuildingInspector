@@ -20,6 +20,9 @@ namespace BuildingInspector
             log = Logger;
             Logger.LogInfo("Building Inspector loading...");
             InitializeConfiguration();
+            InitializeDebugConfiguration();
+            if (InspectorDebug.Enabled)
+                InspectorDebug.Write($"Initialization: version={PluginVersion}; registering Harmony patches and prefab event.");
             new Harmony(PluginGUID).PatchAll(typeof(BuildingInspector).Assembly);
             PrefabManager.OnVanillaPrefabsAvailable += RegisterInspectionFlag;
         }

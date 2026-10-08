@@ -94,5 +94,13 @@ namespace BuildingInspector
                 new ConfigDescription("Minimum spacing between placed inspection flags in meters.", new AcceptableValueRange<float>(0.05f, 1f)));
             BindFlagVariants();
         }
+
+        private void InitializeDebugConfiguration()
+        {
+            ConfigEntry<bool> enabled = Config.Bind("Debug", "Enabled", false,
+                "Enable inspection editor and RPC diagnostics in LogOutput.log. " +
+                "Changes in memory apply immediately; reload the config or restart after editing the file.");
+            InspectorDebug.Initialize(enabled, Logger);
+        }
     }
 }

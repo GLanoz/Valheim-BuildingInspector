@@ -18,6 +18,8 @@ namespace BuildingInspector
             try
             {
                 int registeredCount = AddInspectionFlags();
+                if (InspectorDebug.Enabled)
+                    InspectorDebug.Write($"Prefab registration completed: count={registeredCount}.");
                 Logger.LogInfo($"Inspection Flags registered: {registeredCount}.");
                 Logger.LogInfo("Building Inspector loaded!");
             }
