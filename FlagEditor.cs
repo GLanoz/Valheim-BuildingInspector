@@ -263,7 +263,12 @@ namespace BuildingInspector
                     new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), position, 210f, 62f);
                 Button button = buttonObject.GetComponent<Button>();
                 Image buttonImage = buttonObject.GetComponent<Image>();
-                button.transition = Selectable.Transition.None;
+                button.targetGraphic = buttonImage;
+                button.transition = Selectable.Transition.ColorTint;
+                ColorBlock colors = button.colors;
+                colors.selectedColor = colors.normalColor;
+                button.colors = colors;
+                buttonObject.AddComponent<CategoryButtonHover>().Button = button;
                 flagEditorCategoryButtons[index] = button;
                 flagEditorCategoryButtonImages[index] = buttonImage;
                 int categoryIndex = index;
@@ -320,6 +325,38 @@ namespace BuildingInspector
 
             draftCategory = categoryIndex;
             UpdateFlagEditorCategorySelection();
+        }
+
+        // Unity's Selected (keyboard focus) state takes precedence over Highlighted.
+        // Keep its tint in sync with pointer events without changing focus or category selection.
+        private sealed class CategoryButtonHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+        {
+            public Button Button;
+
+            public void OnPointerEnter(PointerEventData eventData)
+            {
+                SetHoverTint(true);
+            }
+
+            public void OnPointerExit(PointerEventData eventData)
+            {
+                SetHoverTint(false);
+            }
+
+            private void OnDisable()
+            {
+                SetHoverTint(false);
+            }
+
+            private void SetHoverTint(bool hovered)
+            {
+                if (!Button)
+                    return;
+
+                ColorBlock colors = Button.colors;
+                colors.selectedColor = hovered ? colors.highlightedColor : colors.normalColor;
+                Button.colors = colors;
+            }
         }
 
         private static void UpdateFlagEditorCategorySelection()
