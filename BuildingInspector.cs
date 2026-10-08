@@ -22,7 +22,6 @@ namespace BuildingInspector
         public const string PluginName = "Building Inspector";
         public const string PluginVersion = "0.3.0";
 
-        private const string CreatorNameZdoKey = "BuildingInspector_FlagCreatorName";
         private const string MultiplayerWorldGlobalKey = "BuildingInspector_MultiplayerWorld";
 
         private static ManualLogSource log;
@@ -106,31 +105,6 @@ namespace BuildingInspector
 
 
 
-        [HarmonyPatch(typeof(Piece), nameof(Piece.SetCreator))]
-        private static class InspectionFlagCreatorNamePatch
-        {
-            [HarmonyPostfix]
-            private static void Postfix(Piece __instance)
-            {
-                if (!__instance)
-                {
-                    return;
-                }
-
-                FlagNoteReceiver receiver = __instance.GetComponent<FlagNoteReceiver>();
-                if (!receiver)
-                {
-                    return;
-                }
-
-                long creatorId = __instance.GetCreator();
-                Player localPlayer = Player.m_localPlayer;
-                string creatorName = localPlayer && localPlayer.GetPlayerID() == creatorId
-                    ? localPlayer.GetPlayerName()
-                    : string.Empty;
-                receiver.SaveCreatorName(creatorName);
-            }
-        }
 
         [HarmonyPatch(typeof(ZNet), "OpenServer")]
         private static class MultiplayerWorldOpenServerPatch
