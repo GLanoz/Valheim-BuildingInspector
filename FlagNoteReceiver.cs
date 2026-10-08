@@ -175,22 +175,6 @@ namespace BuildingInspector
                 return nview && zdo != null && piece && creatorId != 0L && isCreator;
             }
 
-            public void RequestCategoryChange(int categoryIndex)
-            {
-                if (categoryIndex < 0 || categoryIndex >= flagVariants.Length || !CanEditCategory())
-                {
-                    return;
-                }
-
-                SendFlagEditRequest(nview.GetZDO(), null, categoryIndex);
-            }
-
-            private void ChangeCategoryRpc(long sender, int categoryIndex)
-            {
-                // Object-routed requests cannot prove the original connection on a client owner.
-                log.LogWarning("Rejected legacy object-routed inspection flag category update.");
-            }
-
             public void SaveCreatorName(string creatorName)
             {
                 Piece piece = GetComponent<Piece>();
@@ -324,19 +308,6 @@ namespace BuildingInspector
                 return 0f;
             }
 
-            public void SetText(string text)
-            {
-                Piece piece = nview ? nview.GetComponent<Piece>() : null;
-                if (nview && nview.GetZDO() != null && piece && piece.IsCreator())
-                {
-                    SendFlagEditRequest(nview.GetZDO(), LimitNoteLength((text ?? string.Empty).Trim()), -1);
-                }
-            }
-
-            private void SetNoteRpc(long sender, string text)
-            {
-                log.LogWarning("Rejected legacy object-routed inspection flag note update.");
-            }
         }
 
         [HarmonyPatch(typeof(Player), "Start")]
