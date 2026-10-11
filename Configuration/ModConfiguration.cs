@@ -20,6 +20,7 @@ namespace BuildingInspector
         private static ConfigEntry<float> tiltStepDegrees;
         private static ConfigEntry<float> maxTiltDegrees;
         private static ConfigEntry<KeyboardShortcut> editNoteKey;
+        private static ConfigEntry<bool> advancedFlagEditorUi;
         private static ConfigEntry<float> flagBlockRadius;
         private static ConfigEntry<bool> testFlagEnabled;
         private static ConfigFile modConfiguration;
@@ -99,6 +100,8 @@ namespace BuildingInspector
             tiltStepDegrees = Config.Bind("Flag Rotation", "TiltStepDegrees", 15f, "Tilt change per key press in degrees.");
             maxTiltDegrees = Config.Bind("Flag Rotation", "MaxTiltDegrees", 60f, "Maximum tilt angle in either direction.");
             editNoteKey = Config.Bind("Flag Notes", "EditNoteKey", new KeyboardShortcut(KeyCode.N), "Edit the note on the aimed inspection flag.");
+            advancedFlagEditorUi = Config.Bind("Flag Editor", "AdvancedUI", true,
+                "Use the note and category editor. Disable for the original note-only menu. Changes apply the next time the editor opens; reload the config or restart after editing the file.");
             if (Config.Remove(new ConfigDefinition("Flag Categories", "ChangeCategoryKey")))
             {
                 Config.Save();

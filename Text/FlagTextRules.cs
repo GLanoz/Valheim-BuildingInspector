@@ -92,5 +92,30 @@ namespace BuildingInspector
 
             return addedChar;
         }
+
+        private static string DecodeSimpleNoteInput(string text)
+        {
+            // Match TextInput.OnEnter / OnInput's native escape-sequence conversion.
+            return (text ?? string.Empty).Replace("\\n", "\n").Replace("\\t", "\t");
+        }
+
+        private static bool WouldExceedSimpleNoteLimits(string text)
+        {
+            if (LimitNoteLength(text).Length != text.Length || !simpleNoteMeasure)
+                return true;
+
+            return simpleNoteMeasure.GetTextInfo(text).lineCount > MaxNoteLines;
+        }
+
+        private static char ValidateSimpleNoteInput(string text, int charIndex, char addedChar)
+        {
+            if (previousSimpleValidation != null)
+                addedChar = previousSimpleValidation(text, charIndex, addedChar);
+            if (addedChar == '\0')
+                return '\0';
+
+            string candidate = text.Insert(charIndex, addedChar.ToString());
+            return WouldExceedSimpleNoteLimits(DecodeSimpleNoteInput(candidate)) ? '\0' : addedChar;
+        }
     }
 }

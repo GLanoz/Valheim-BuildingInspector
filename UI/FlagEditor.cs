@@ -1,6 +1,8 @@
 using System;
 using HarmonyLib;
 using Jotunn.Managers;
+using GUIFramework;
+using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -10,6 +12,17 @@ namespace BuildingInspector
     public partial class BuildingInspector
     {
         private static bool flagEditorOpen;
+        private static bool usingNewFlagEditorUi;
+        private static bool simpleNoteClosing;
+        private static TextInput simpleNoteMenu;
+        private static GuiInputField simpleNoteField;
+        private static TMP_Text simpleNoteMeasure;
+        private static TMP_InputField.LineType previousSimpleLineType;
+        private static int previousSimpleLineLimit;
+        private static int previousSimpleCharacterLimit;
+        private static TMP_InputField.OnValidateInput previousSimpleValidation;
+        private static TextWrappingModes previousSimpleWrapping;
+        private static TextOverflowModes previousSimpleOverflow;
         private static bool flagEditorInputBlocked;
         private static bool flagEditorInputUnblockPending;
         private static int flagEditorUnblockFrame;
@@ -29,7 +42,8 @@ namespace BuildingInspector
         {
             if (flagEditorOpen)
             {
-                if (!flagEditorTarget || !flagEditorTarget.CanEditCategory() || Input.GetKeyDown(KeyCode.Escape))
+                if (!flagEditorTarget || !flagEditorTarget.CanEditCategory() || Input.GetKeyDown(KeyCode.Escape) ||
+                    (!usingNewFlagEditorUi && (!simpleNoteMenu || !simpleNoteMenu.m_panel || !simpleNoteMenu.m_panel.activeSelf)))
                 {
                     CloseFlagEditor();
                 }
@@ -126,7 +140,13 @@ namespace BuildingInspector
 
         private void OpenFlagEditor(FlagNoteReceiver receiver)
         {
-            if (!receiver || !receiver.CanEditCategory() || !EnsureFlagEditorUi())
+            if (flagEditorOpen || TextInput.IsVisible())
+                return;
+
+            bool useNewUi = advancedFlagEditorUi.Value;
+            if (!receiver || !receiver.CanEditCategory() ||
+                (useNewUi ? !EnsureFlagEditorUi() : !TextInput.instance || !TextInput.instance.m_inputField ||
+                    !TextInput.instance.m_panel || !TextInput.instance.m_inputField.textComponent))
             {
                 if (InspectorDebug.Enabled)
                     LogEditorEvent(receiver, "denied", !receiver ? "TargetUnavailable" :
@@ -135,12 +155,16 @@ namespace BuildingInspector
             }
 
             flagEditorTarget = receiver;
+            usingNewFlagEditorUi = useNewUi;
             originalNote = receiver.GetText();
             originalCategory = receiver.GetEditorCategoryIndex();
             draftCategory = originalCategory;
-            flagEditorNoteField.text = originalNote;
-            UpdateFlagEditorCategorySelection();
-            flagEditorCanvas.SetActive(true);
+            if (useNewUi)
+            {
+                flagEditorNoteField.text = originalNote;
+                UpdateFlagEditorCategorySelection();
+                flagEditorCanvas.SetActive(true);
+            }
             flagEditorOpen = true;
             flagEditorInputBlocked = true;
             editorPreviousCursorLock = Cursor.lockState;
@@ -149,15 +173,153 @@ namespace BuildingInspector
             Cursor.visible = true;
             GUIManager.BlockInput(true);
 
-            EventSystem eventSystem = EventSystem.current;
-            if (eventSystem)
+            if (useNewUi)
             {
-                eventSystem.SetSelectedGameObject(flagEditorNoteField.gameObject);
+                EventSystem eventSystem = EventSystem.current;
+                if (eventSystem)
+                {
+                    eventSystem.SetSelectedGameObject(flagEditorNoteField.gameObject);
+                }
+
+                flagEditorNoteField.ActivateInputField();
+            }
+            else
+                OpenSimpleFlagEditor();
+
+            if (InspectorDebug.Enabled)
+            {
+                InspectorDebug.Write($"Editor UI opened: ui={(useNewUi ? "FlagEditor" : "SimpleNote")}; role={InspectorDebug.Role}.");
+                LogEditorEvent(receiver, "opened", "Authorized");
+            }
+        }
+
+        private void OpenSimpleFlagEditor()
+        {
+            simpleNoteMenu = TextInput.instance;
+            simpleNoteClosing = false;
+            simpleNoteField = simpleNoteMenu.m_inputField;
+            previousSimpleLineType = simpleNoteField.lineType;
+            previousSimpleLineLimit = simpleNoteField.lineLimit;
+            previousSimpleCharacterLimit = simpleNoteField.characterLimit;
+            previousSimpleValidation = simpleNoteField.onValidateInput;
+            previousSimpleWrapping = simpleNoteField.textComponent.textWrappingMode;
+            previousSimpleOverflow = simpleNoteField.textComponent.overflowMode;
+
+            // Keep the native panel, title, buttons and Enter-to-submit interaction.
+            simpleNoteField.lineType = TMP_InputField.LineType.MultiLineSubmit;
+            // Native lineLimit can submit on Enter at the limit; validate visual layout instead.
+            simpleNoteField.lineLimit = 0;
+            simpleNoteField.textComponent.textWrappingMode = TextWrappingModes.Normal;
+            simpleNoteField.textComponent.overflowMode = TextOverflowModes.Overflow;
+            simpleNoteMenu.RequestText(new SimpleFlagNoteAdapter(), "Inspection flag note", 0);
+
+            // Measure with the same font and width without modifying the visible text's mesh.
+            simpleNoteMeasure = Instantiate(simpleNoteField.textComponent, simpleNoteField.textComponent.transform.parent);
+            simpleNoteMeasure.gameObject.name = "BuildingInspectorNoteMeasure";
+            simpleNoteMeasure.gameObject.SetActive(false);
+            simpleNoteField.onValidateInput = ValidateSimpleNoteInput;
+        }
+
+        private sealed class SimpleFlagNoteAdapter : TextReceiver
+        {
+            public string GetText()
+            {
+                return originalNote ?? string.Empty;
             }
 
-            flagEditorNoteField.ActivateInputField();
-            if (InspectorDebug.Enabled)
-                LogEditorEvent(receiver, "opened", "Authorized");
+            public void SetText(string text)
+            {
+                if (flagEditorOpen && !usingNewFlagEditorUi && !simpleNoteClosing && simpleNoteField &&
+                    !simpleNoteField.wasCanceled && !Input.GetKeyDown(KeyCode.Escape) &&
+                    !WouldExceedSimpleNoteLimits(text ?? string.Empty))
+                    SaveFlagNote(text);
+            }
+        }
+
+        private static bool CanSubmitSimpleFlagNote(TextInput menu)
+        {
+            if (!flagEditorOpen || usingNewFlagEditorUi || menu != simpleNoteMenu)
+                return true;
+
+            if (simpleNoteClosing || !simpleNoteField || simpleNoteField.wasCanceled || Input.GetKeyDown(KeyCode.Escape))
+                return false;
+
+            if (!flagEditorTarget || !flagEditorTarget.CanEditCategory())
+            {
+                CloseFlagEditor();
+                return false;
+            }
+
+            if (WouldExceedSimpleNoteLimits(DecodeSimpleNoteInput(simpleNoteField.text)))
+            {
+                simpleNoteField.ActivateInputField();
+                return false;
+            }
+            return true;
+        }
+
+        private static void RestoreSimpleFlagEditor()
+        {
+            if (simpleNoteField)
+            {
+                simpleNoteField.onValidateInput = previousSimpleValidation;
+                simpleNoteField.lineType = previousSimpleLineType;
+                simpleNoteField.lineLimit = previousSimpleLineLimit;
+                simpleNoteField.characterLimit = previousSimpleCharacterLimit;
+                if (simpleNoteField.textComponent)
+                {
+                    simpleNoteField.textComponent.textWrappingMode = previousSimpleWrapping;
+                    simpleNoteField.textComponent.overflowMode = previousSimpleOverflow;
+                }
+            }
+            if (simpleNoteMeasure)
+                Destroy(simpleNoteMeasure.gameObject);
+            simpleNoteMeasure = null;
+            simpleNoteField = null;
+            simpleNoteMenu = null;
+            simpleNoteClosing = false;
+            previousSimpleValidation = null;
+        }
+
+        [HarmonyPatch(typeof(TextInput), nameof(TextInput.OnEnter))]
+        private static class SimpleFlagNoteEnterPatch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(TextInput __instance) => CanSubmitSimpleFlagNote(__instance);
+        }
+
+        [HarmonyPatch(typeof(TextInput), nameof(TextInput.OnInput))]
+        private static class SimpleFlagNoteInputPatch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(TextInput __instance)
+            {
+                if (!flagEditorOpen || usingNewFlagEditorUi || __instance != simpleNoteMenu)
+                    return true;
+
+                // OnEnter applies the same native conversion without leaving a deferred Hide behind.
+                __instance.OnEnter();
+                return false;
+            }
+        }
+
+        [HarmonyPatch(typeof(TextInput), nameof(TextInput.Hide))]
+        private static class SimpleFlagNoteHidePatch
+        {
+            [HarmonyPrefix]
+            private static void Prefix(TextInput __instance)
+            {
+                // Deactivating the native field can fire callbacks; closing must never submit a draft.
+                if (flagEditorOpen && !usingNewFlagEditorUi && __instance == simpleNoteMenu)
+                    simpleNoteClosing = true;
+            }
+
+            [HarmonyPostfix]
+            private static void Postfix(TextInput __instance)
+            {
+                if (flagEditorOpen && !usingNewFlagEditorUi && __instance == simpleNoteMenu)
+                    CloseFlagEditor();
+            }
         }
 
         private static string GetEditorUiBlockReason()
@@ -387,11 +549,7 @@ namespace BuildingInspector
                 return;
             }
 
-            string note = LimitNoteLength((flagEditorNoteField.text ?? string.Empty).Trim());
-            if (!string.Equals(note, originalNote, StringComparison.Ordinal))
-            {
-                flagEditorTarget.SetText(note);
-            }
+            SaveFlagNote(flagEditorNoteField.text);
 
             if (draftCategory != originalCategory)
             {
@@ -399,6 +557,18 @@ namespace BuildingInspector
             }
 
             CloseFlagEditor();
+        }
+
+        private static void SaveFlagNote(string text)
+        {
+            if (!flagEditorTarget || !flagEditorTarget.CanEditCategory())
+                return;
+
+            string note = LimitNoteLength((text ?? string.Empty).Trim());
+            if (!string.Equals(note, originalNote, StringComparison.Ordinal))
+            {
+                flagEditorTarget.SetText(note);
+            }
         }
 
         private static void CloseFlagEditor()
@@ -411,6 +581,12 @@ namespace BuildingInspector
             if (InspectorDebug.Enabled)
                 LogEditorEvent(flagEditorTarget, "closed", "EditorClosed");
             flagEditorOpen = false;
+            if (!usingNewFlagEditorUi)
+            {
+                if (simpleNoteMenu && simpleNoteMenu.m_panel && simpleNoteMenu.m_panel.activeSelf)
+                    simpleNoteMenu.Hide();
+                RestoreSimpleFlagEditor();
+            }
             flagEditorTarget = null;
             if (flagEditorCanvas)
             {

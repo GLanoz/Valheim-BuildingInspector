@@ -42,6 +42,16 @@
       <Private>false</Private>
     </Reference>
 
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(ValheimPath)\valheim_Data\Managed\Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <Reference Include="gui_framework">
+      <HintPath>$(ValheimPath)\valheim_Data\Managed\gui_framework.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
     <PackageReference Include="BepInEx.Core" Version="5.4.21" />
     <PackageReference Include="JotunnLib" Version="2.30.2" />
   </ItemGroup>
